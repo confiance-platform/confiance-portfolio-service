@@ -15,7 +15,7 @@ public class PortfolioController {
     private final PortfolioRepository repository;
 
     @GetMapping("/user/{userId}")
-    public ResponseEntity<ApiResponse<Portfolio>> getUserPortfolio(@PathVariable Long userId) {
+    public ResponseEntity<ApiResponse<Portfolio>> getUserPortfolio(@PathVariable("userId") Long userId) {
         return repository.findByUserId(userId)
                 .map(portfolio -> ResponseEntity.ok(ApiResponse.success(portfolio)))
                 .orElseGet(() -> {
