@@ -215,6 +215,31 @@ public class TradeService {
                 .build();
     }
 
+    public PortfolioStats getPortfolioStats() {
+        long totalTrades = tradeRepository.count();
+        long openTrades = tradeRepository.findAll().stream()
+                .filter(t -> t.getStatus() == TradeStatus.OPEN || t.getStatus() == TradeStatus.PARTIALLY_SOLD)
+                .count();
+
+        BigDecimal totalAUM = tradeRepository.findAll().stream()
+                .filter(t -> t.getStatus() == TradeStatus.OPEN || t.getStatus() == TradeStatus.PARTIALLY_SOLD)
+                .map(Trade::getCurrentValue)
+                .filter(v -> v != null)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        long usersWithInvestments = tradeRepository.findAll().stream()
+                .map(Trade::getUserId)
+                .distinct()
+                .count();
+
+        return PortfolioStats.builder()
+                .totalTrades(totalTrades)
+                .openTrades(openTrades)
+                .totalAUM(totalAUM)
+                .usersWithInvestments(usersWithInvestments)
+                .build();
+    }
+
     @lombok.Data
     @lombok.Builder
     @lombok.NoArgsConstructor
@@ -225,5 +250,16 @@ public class TradeService {
         private BigDecimal totalInvestedAmount;
         private int openTradesCount;
         private int closedTradesCount;
+    }
+
+    @lombok.Data
+    @lombok.Builder
+    @lombok.NoArgsConstructor
+    @lombok.AllArgsConstructor
+    public static class PortfolioStats {
+        private long totalTrades;
+        private long openTrades;
+        private BigDecimal totalAUM;
+        private long usersWithInvestments;
     }
 }
