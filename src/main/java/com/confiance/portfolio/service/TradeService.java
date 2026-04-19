@@ -9,15 +9,21 @@ import com.confiance.portfolio.dto.SellTradeRequest;
 import com.confiance.portfolio.dto.TradeRequest;
 import com.confiance.portfolio.dto.TradeResponse;
 import com.confiance.portfolio.entity.Trade;
+import com.confiance.common.notification.Notifier;
 import com.confiance.portfolio.repository.TradeRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -29,6 +35,10 @@ import java.util.List;
 public class TradeService {
 
     private final TradeRepository tradeRepository;
+    private final Notifier notifier;
+    @Autowired(required = false)
+    @Qualifier("notifierLoadBalancedRestTemplate")
+    private RestTemplate loadBalancedRestTemplate;
 
     @Transactional
     public TradeResponse createTrade(Long userId, TradeRequest request) {
@@ -52,7 +62,57 @@ public class TradeService {
                 .build();
 
         Trade saved = tradeRepository.save(trade);
+
+        // Fan-out activity notifications (best-effort — never blocks the save)
+        publishTradeNotifications(saved);
+
         return toResponse(saved);
+    }
+
+    private void publishTradeNotifications(Trade trade) {
+        try {
+            // Confirmation for the user who placed the trade.
+            notifier.notifyUser(trade.getUserId(),
+                "Trade recorded",
+                "Buy " + trade.getSymbol() + " @ " + trade.getBuyPrice()
+                    + " x " + trade.getBuyQuantity(),
+                "TRADE",
+                "/financial/trades",
+                "ph-chart-line-up");
+
+            // Admin broadcast — fetch admin user IDs via user-service.
+            java.util.List<Long> admins = fetchAdminIds();
+            if (!admins.isEmpty()) {
+                notifier.notifyUsers(admins,
+                    "New trade by user " + trade.getUserId(),
+                    trade.getSymbol() + " @ " + trade.getBuyPrice()
+                        + " x " + trade.getBuyQuantity() + " (" + trade.getMarket() + ")",
+                    "TRADE",
+                    "/admin/client-pl",
+                    "ph-chart-line-up");
+            }
+        } catch (Exception e) {
+            log.warn("Trade notification fan-out failed: {}", e.getMessage());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private java.util.List<Long> fetchAdminIds() {
+        if (loadBalancedRestTemplate == null) return java.util.List.of();
+        try {
+            java.util.Map<String, Object> resp = loadBalancedRestTemplate.getForObject(
+                "http://user-service/api/v1/users/admins/ids", java.util.Map.class);
+            if (resp == null) return java.util.List.of();
+            Object data = resp.get("data");
+            if (!(data instanceof java.util.List<?> list)) return java.util.List.of();
+            return list.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(o -> ((Number) o).longValue())
+                .toList();
+        } catch (Exception e) {
+            log.debug("fetchAdminIds failed: {}", e.getMessage());
+            return java.util.List.of();
+        }
     }
 
     @Transactional
